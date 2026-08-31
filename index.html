@@ -97,13 +97,12 @@
   }
   .course-item.active .count { color: rgba(255,255,255,0.85); }
   .course-item .del-course {
-    display: none;
+    display: inline-block;
     border: none; background: none; cursor: pointer;
     color: inherit; font-size: 14px; padding: 0 2px;
-    opacity: 0.7;
+    opacity: 0.5;
   }
-  .course-item:hover .del-course { display: inline-block; }
-  .course-item:hover .count { display: none; }
+  .course-item:hover .del-course { opacity: 0.9; }
 
   .add-course {
     display: flex;
@@ -793,13 +792,6 @@ function render() {
 
 document.addEventListener('click', async (e) => {
  try {
-  const courseEl = e.target.closest('[data-course]');
-  if (courseEl) {
-    state.activeCourse = courseEl.dataset.course;
-    render();
-    return;
-  }
-
   const delCourse = e.target.closest('[data-delcourse]');
   if (delCourse) {
     e.stopPropagation();
@@ -809,6 +801,13 @@ document.addEventListener('click', async (e) => {
       if (state.activeCourse === id) state.activeCourse = 'all';
       render();
     }
+    return;
+  }
+
+  const courseEl = e.target.closest('[data-course]');
+  if (courseEl) {
+    state.activeCourse = courseEl.dataset.course;
+    render();
     return;
   }
 
