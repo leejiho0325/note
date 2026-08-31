@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>강의 노트</title>
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/static/pretendard.css">
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <style>
   :root {
     --bg: #F2F2F7;
@@ -434,7 +435,23 @@
 </style>
 </head>
 <body>
-<div class="app">
+
+<div class="auth-screen" id="authScreen" style="display:none;">
+  <div class="auth-box">
+    <h1>강의 노트</h1>
+    <div class="sub" id="authSub">이메일과 비밀번호로 로그인하세요</div>
+    <div id="authError"></div>
+    <input type="email" id="authEmail" placeholder="이메일">
+    <input type="password" id="authPassword" placeholder="비밀번호 (6자 이상)">
+    <button class="primary" id="authSubmit">로그인</button>
+    <div class="switch">
+      <span id="switchText">계정이 없나요?</span>
+      <button id="switchMode">회원가입</button>
+    </div>
+  </div>
+</div>
+
+<div class="app" id="appRoot" style="display:none;">
   <aside class="sidebar">
     <div class="brand">강의 노트<span class="dot">.</span></div>
     <div class="course-list" id="courseList"></div>
@@ -443,8 +460,9 @@
       <div class="color-picker" id="colorPicker"></div>
       <button id="addCourseBtn">과목 추가</button>
     </div>
-    <div class="sidebar-foot">
-      <button id="resetBtn">전체 초기화</button>
+    <div class="user-badge">
+      <span id="userEmail"></span>
+      <button id="logoutBtn">로그아웃</button>
     </div>
   </aside>
 
@@ -467,6 +485,13 @@
 </div>
 
 <script>
+// ====== Supabase 설정 (본인 프로젝트 값으로 교체하세요) ======
+const SUPABASE_URL = 'https://cylgoxjtbmnqneuaqhem.supabase.co';
+const SUPABASE_ANON_KEY = 'sb_publishable_fmD4e9gOhvN-cqqio5QgaQ_nZeiC70P';
+// ============================================================
+
+const supabaseClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+
 const COLORS = ['#7A3B33', '#47614f', '#b9902f', '#3d5a80', '#7d5ba6', '#a13d63'];
 
 let state = {
@@ -477,47 +502,147 @@ let state = {
   search: '',
   formOpen: false,
   loaded: false,
+  session: null,
 };
 
-const STORAGE_PREFIX = 'lecture-notes:';
+let authMode = 'login'; // 'login' | 'signup'
 
+// ---------- Auth ----------
+async function initAuth() {
+  const { data: { session } } = await supabaseClient.auth.getSession();
+  state.session = session;
+  if (session) {
+    showApp();
+  } else {
+    showAuth();
+  }
+
+  supabaseClient.auth.onAuthStateChange((_event, session) => {
+    state.session = session;
+    if (session) {
+      showApp();
+    } else {
+      showAuth();
+    }
+  });
+}
+
+function showAuth() {
+  document.getElementById('authScreen').style.display = 'flex';
+  document.getElementById('appRoot').style.display = 'none';
+}
+
+async function showApp() {
+  document.getElementById('authScreen').style.display = 'none';
+  document.getElementById('appRoot').style.display = 'grid';
+  document.getElementById('userEmail').textContent = state.session.user.email;
+  await loadState();
+}
+
+function setAuthError(msg) {
+  const el = document.getElementById('authError');
+  el.innerHTML = msg ? `<div class="auth-error">${escapeHtml(msg)}</div>` : '';
+}
+
+document.getElementById('switchMode').addEventListener('click', () => {
+  authMode = authMode === 'login' ? 'signup' : 'login';
+  document.getElementById('authSubmit').textContent = authMode === 'login' ? '로그인' : '회원가입';
+  document.getElementById('authSub').textContent = authMode === 'login' ? '이메일과 비밀번호로 로그인하세요' : '새 계정을 만드세요';
+  document.getElementById('switchText').textContent = authMode === 'login' ? '계정이 없나요?' : '이미 계정이 있나요?';
+  document.getElementById('switchMode').textContent = authMode === 'login' ? '회원가입' : '로그인';
+  setAuthError('');
+});
+
+document.getElementById('authSubmit').addEventListener('click', async () => {
+  const email = document.getElementById('authEmail').value.trim();
+  const password = document.getElementById('authPassword').value;
+  if (!email || !password) { setAuthError('이메일과 비밀번호를 입력하세요.'); return; }
+  setAuthError('');
+
+  if (authMode === 'login') {
+    const { error } = await supabaseClient.auth.signInWithPassword({ email, password });
+    if (error) setAuthError(error.message);
+  } else {
+    const { error } = await supabaseClient.auth.signUp({ email, password });
+    if (error) setAuthError(error.message);
+    else setAuthError('가입 확인 메일을 보냈어요. 확인 후 로그인하세요.');
+  }
+});
+
+document.getElementById('logoutBtn').addEventListener('click', async () => {
+  await supabaseClient.auth.signOut();
+});
+
+// ---------- Data load / persist (Supabase) ----------
 async function loadState() {
-  try {
-    const c = localStorage.getItem(STORAGE_PREFIX + 'courses');
-    state.courses = c ? JSON.parse(c) : [];
-  } catch (e) { state.courses = []; }
-  try {
-    const n = localStorage.getItem(STORAGE_PREFIX + 'notes');
-    state.notes = n ? JSON.parse(n) : [];
-  } catch (e) { state.notes = []; }
+  const userId = state.session.user.id;
+
+  const { data: courses, error: cErr } = await supabaseClient
+    .from('courses').select('*').order('created_at', { ascending: true });
+  if (cErr) console.error(cErr);
+  state.courses = courses || [];
+
+  const { data: notes, error: nErr } = await supabaseClient
+    .from('notes').select('*').order('created_at', { ascending: true });
+  if (nErr) console.error(nErr);
+  state.notes = notes || [];
 
   if (state.courses.length === 0) {
-    state.courses = [
-      { id: 'c1', name: '자료구조', color: COLORS[0] },
-      { id: 'c2', name: '리눅스 시스템', color: COLORS[1] },
-    ];
-    await persistCourses();
+    await supabaseClient.from('courses').insert([
+      { user_id: userId, name: '자료구조', color: COLORS[0] },
+      { user_id: userId, name: '리눅스 시스템', color: COLORS[1] },
+    ]);
+    const { data: freshCourses } = await supabaseClient.from('courses').select('*').order('created_at', { ascending: true });
+    state.courses = freshCourses || [];
   }
+
   state.loaded = true;
   render();
 }
 
-async function persistCourses() {
-  try { localStorage.setItem(STORAGE_PREFIX + 'courses', JSON.stringify(state.courses)); }
-  catch (e) { console.error('저장 실패', e); }
-}
-async function persistNotes() {
-  try { localStorage.setItem(STORAGE_PREFIX + 'notes', JSON.stringify(state.notes)); }
-  catch (e) { console.error('저장 실패', e); }
+async function addCourseRemote(name, color) {
+  const userId = state.session.user.id;
+  const { data, error } = await supabaseClient
+    .from('courses').insert([{ user_id: userId, name, color }]).select();
+  if (error) { alert('과목 추가 실패: ' + error.message); return; }
+  state.courses.push(data[0]);
 }
 
-function uid() { return Date.now().toString(36) + Math.random().toString(36).slice(2, 7); }
+async function deleteCourseRemote(id) {
+  const { error } = await supabaseClient.from('courses').delete().eq('id', id);
+  if (error) { alert('삭제 실패: ' + error.message); return; }
+  state.courses = state.courses.filter(c => c.id !== id);
+}
+
+async function saveNoteRemote({ id, courseId, date, title, content }) {
+  const userId = state.session.user.id;
+  if (id) {
+    const { error } = await supabaseClient
+      .from('notes').update({ course_id: courseId, date, title, content }).eq('id', id);
+    if (error) { alert('수정 실패: ' + error.message); return; }
+    const note = state.notes.find(n => n.id === id);
+    Object.assign(note, { course_id: courseId, date, title, content });
+  } else {
+    const { data, error } = await supabaseClient
+      .from('notes').insert([{ user_id: userId, course_id: courseId, date, title, content }]).select();
+    if (error) { alert('저장 실패: ' + error.message); return; }
+    state.notes.push(data[0]);
+  }
+}
+
+async function deleteNoteRemote(id) {
+  const { error } = await supabaseClient.from('notes').delete().eq('id', id);
+  if (error) { alert('삭제 실패: ' + error.message); return; }
+  state.notes = state.notes.filter(n => n.id !== id);
+}
+
 function courseById(id) { return state.courses.find(c => c.id === id); }
 
 function escapeHtml(s) {
-  return s.replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
+  return String(s).replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
 }
 
+// ---------- Render ----------
 function renderSidebar() {
   const list = document.getElementById('courseList');
   const allCount = state.notes.length;
@@ -526,7 +651,7 @@ function renderSidebar() {
       <span>전체</span><span class="count">${allCount}</span>
     </div>`;
   html += state.courses.map(c => {
-    const count = state.notes.filter(n => n.courseId === c.id).length;
+    const count = state.notes.filter(n => n.course_id === c.id).length;
     return `<div class="course-item ${state.activeCourse===c.id?'active':''}" data-course="${c.id}" style="--swatch:${c.color}">
       <span class="swatch"></span>
       <span>${escapeHtml(c.name)}</span>
@@ -553,18 +678,18 @@ function renderHeader() {
   } else {
     const c = courseById(state.activeCourse);
     title.textContent = c ? c.name : '전체 노트';
-    sub.textContent = `${state.notes.filter(n=>n.courseId===state.activeCourse).length}개의 강의 기록`;
+    sub.textContent = `${state.notes.filter(n=>n.course_id===state.activeCourse).length}개의 강의 기록`;
   }
 }
 
 function getFilteredNotes() {
   let list = state.notes;
-  if (state.activeCourse !== 'all') list = list.filter(n => n.courseId === state.activeCourse);
+  if (state.activeCourse !== 'all') list = list.filter(n => n.course_id === state.activeCourse);
   if (state.search.trim()) {
     const q = state.search.trim().toLowerCase();
-    list = list.filter(n => n.title.toLowerCase().includes(q) || n.content.toLowerCase().includes(q));
+    list = list.filter(n => n.title.toLowerCase().includes(q) || (n.content||'').toLowerCase().includes(q));
   }
-  return [...list].sort((a,b) => (b.date + b.createdAt).localeCompare(a.date + a.createdAt));
+  return [...list].sort((a,b) => (b.date + b.created_at).localeCompare(a.date + a.created_at));
 }
 
 function groupByDate(notes) {
@@ -596,7 +721,7 @@ function renderNotes() {
     <div class="day-group">
       <div class="day-label">${fmtDate(date)}</div>
       ${notes.map(n => {
-        const c = courseById(n.courseId);
+        const c = courseById(n.course_id);
         const color = c ? c.color : '#7A3B33';
         return `<div class="note-card" style="--swatch:${color}">
           <div class="card-actions">
@@ -607,7 +732,7 @@ function renderNotes() {
             <h3>${escapeHtml(n.title)}</h3>
             <span class="tag">${c ? escapeHtml(c.name) : '삭제된 과목'}</span>
           </div>
-          <div class="content">${escapeHtml(n.content)}</div>
+          <div class="content">${escapeHtml(n.content || '')}</div>
         </div>`;
       }).join('')}
     </div>
@@ -619,7 +744,7 @@ function renderForm() {
   if (!state.formOpen) { slot.innerHTML = ''; return; }
 
   const editing = state.editingId ? state.notes.find(n => n.id === state.editingId) : null;
-  const defaultCourse = editing ? editing.courseId : (state.activeCourse !== 'all' ? state.activeCourse : (state.courses[0] ? state.courses[0].id : ''));
+  const defaultCourse = editing ? editing.course_id : (state.activeCourse !== 'all' ? state.activeCourse : (state.courses[0] ? state.courses[0].id : ''));
   const defaultDate = editing ? editing.date : new Date().toISOString().slice(0,10);
 
   slot.innerHTML = `
@@ -633,7 +758,7 @@ function renderForm() {
       <div class="row">
         <input type="text" class="title-input" id="formTitle" placeholder="강의 주제 / 제목" value="${editing ? escapeHtml(editing.title) : ''}">
       </div>
-      <textarea id="formContent" placeholder="수업 내용을 정리하세요...">${editing ? escapeHtml(editing.content) : ''}</textarea>
+      <textarea id="formContent" placeholder="수업 내용을 정리하세요...">${editing ? escapeHtml(editing.content || '') : ''}</textarea>
       <div class="actions">
         <button class="cancel" id="formCancel">취소</button>
         <button class="save" id="formSave">${editing ? '수정 완료' : '저장'}</button>
@@ -663,9 +788,8 @@ document.addEventListener('click', async (e) => {
     e.stopPropagation();
     const id = delCourse.dataset.delcourse;
     if (confirm('이 과목과 관련된 노트도 함께 사라지지 않아요. 과목만 삭제할까요?')) {
-      state.courses = state.courses.filter(c => c.id !== id);
+      await deleteCourseRemote(id);
       if (state.activeCourse === id) state.activeCourse = 'all';
-      await persistCourses();
       render();
     }
     return;
@@ -683,9 +807,8 @@ document.addEventListener('click', async (e) => {
     const name = nameInput.value.trim();
     if (!name) return;
     const color = document.getElementById('colorPicker').dataset.selected || COLORS[0];
-    state.courses.push({ id: uid(), name, color });
+    await addCourseRemote(name, color);
     nameInput.value = '';
-    await persistCourses();
     render();
     return;
   }
@@ -710,8 +833,7 @@ document.addEventListener('click', async (e) => {
   if (e.target.closest('[data-del]')) {
     const id = e.target.closest('[data-del]').dataset.del;
     if (confirm('이 노트를 삭제할까요?')) {
-      state.notes = state.notes.filter(n => n.id !== id);
-      await persistNotes();
+      await deleteNoteRemote(id);
       render();
     }
     return;
@@ -732,28 +854,10 @@ document.addEventListener('click', async (e) => {
     if (!title) { alert('제목을 입력해주세요.'); return; }
     if (!courseId) { alert('과목을 선택해주세요.'); return; }
 
-    if (state.editingId) {
-      const note = state.notes.find(n => n.id === state.editingId);
-      Object.assign(note, { courseId, date, title, content });
-    } else {
-      state.notes.push({ id: uid(), courseId, date, title, content, createdAt: Date.now().toString(36) });
-    }
-    await persistNotes();
+    await saveNoteRemote({ id: state.editingId, courseId, date, title, content });
     state.formOpen = false;
     state.editingId = null;
     render();
-    return;
-  }
-
-  if (e.target.id === 'resetBtn') {
-    if (confirm('모든 과목과 노트를 삭제할까요? 되돌릴 수 없어요.')) {
-      state.courses = [];
-      state.notes = [];
-      state.activeCourse = 'all';
-      await persistCourses();
-      await persistNotes();
-      render();
-    }
     return;
   }
 });
@@ -763,7 +867,7 @@ document.getElementById('searchInput').addEventListener('input', (e) => {
   renderNotes();
 });
 
-loadState();
+initAuth();
 </script>
 </body>
 </html>
