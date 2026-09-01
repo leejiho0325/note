@@ -216,8 +216,86 @@
     white-space: nowrap;
   }
   .new-btn:hover { background: #0066d6; }
+  .new-btn.secondary { background: rgba(118,118,128,0.14); color: var(--ink); }
+  .new-btn.secondary:hover { background: rgba(118,118,128,0.22); }
 
   .toolbar { display: flex; gap: 10px; margin-bottom: 26px; }
+
+  /* ---------- Deadlines ---------- */
+  .deadline-strip {
+    display: flex;
+    gap: 10px;
+    overflow-x: auto;
+    padding-bottom: 4px;
+    margin-bottom: 22px;
+  }
+  .deadline-card {
+    flex: 0 0 auto;
+    background: var(--card);
+    border-radius: var(--radius-sm);
+    padding: 10px 14px;
+    box-shadow: var(--shadow);
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    min-width: 180px;
+  }
+  .deadline-card .dday {
+    font-weight: 800;
+    font-size: 13px;
+    color: var(--blue);
+    white-space: nowrap;
+  }
+  .deadline-card.overdue .dday { color: var(--red); }
+  .deadline-card .info { flex: 1; min-width: 0; }
+  .deadline-card .title-line {
+    font-size: 13.5px;
+    font-weight: 600;
+    color: var(--ink);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .deadline-card .course-line {
+    font-size: 11.5px;
+    color: var(--ink-soft);
+  }
+  .deadline-card button {
+    border: none; background: none; cursor: pointer;
+    color: var(--ink-soft); font-size: 13px; padding: 2px;
+    font-family: inherit;
+  }
+  .task-form {
+    background: var(--card);
+    border-radius: var(--radius);
+    padding: 18px 20px;
+    margin-bottom: 22px;
+    box-shadow: var(--shadow);
+  }
+  .task-form .row { display: flex; gap: 10px; margin-bottom: 10px; }
+  .task-form select, .task-form input[type=text], .task-form input[type=date] {
+    border: none;
+    background: rgba(118,118,128,0.10);
+    border-radius: var(--radius-sm);
+    padding: 9px 11px;
+    font-size: 13.5px;
+    font-family: inherit;
+    color: var(--ink);
+  }
+  .task-form input[type=text] { flex: 1; }
+  .task-form .actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 4px; }
+  .task-form .actions button {
+    border: none;
+    background: rgba(118,118,128,0.12);
+    color: var(--ink);
+    padding: 8px 16px;
+    border-radius: 20px;
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+    font-family: inherit;
+  }
+  .task-form .actions .save { background: var(--blue); color: #fff; }
 
   /* ---------- Note form ---------- */
   .note-form {
@@ -321,12 +399,13 @@
     white-space: pre-wrap;
   }
   .note-card .card-actions {
-    position: absolute;
-    top: 14px; right: 16px;
-    display: none;
+    display: flex;
+    justify-content: flex-end;
     gap: 10px;
+    margin-top: 12px;
+    padding-top: 10px;
+    border-top: 1px solid var(--separator);
   }
-  .note-card:hover .card-actions { display: flex; }
   .note-card .card-actions button {
     border: none;
     background: rgba(118,118,128,0.10);
@@ -481,10 +560,14 @@
       <input type="text" class="search" id="searchInput" placeholder="제목·내용 검색">
     </div>
 
+    <div id="deadlineSlot"></div>
+
     <div class="toolbar">
       <button class="new-btn" id="newNoteBtn">+ 새 강의 노트</button>
+      <button class="new-btn secondary" id="newTaskBtn">+ 마감일 추가</button>
     </div>
 
+    <div id="taskFormSlot"></div>
     <div id="formSlot"></div>
     <div id="notesSlot"></div>
   </main>
@@ -503,10 +586,12 @@ const COLORS = ['#7A3B33', '#47614f', '#b9902f', '#3d5a80', '#7d5ba6', '#a13d63'
 let state = {
   courses: [],
   notes: [],
+  tasks: [],
   activeCourse: 'all',
   editingId: null,
   search: '',
   formOpen: false,
+  taskFormOpen: false,
   loaded: false,
   session: null,
 };
@@ -609,8 +694,36 @@ async function loadState() {
     state.courses = freshCourses || [];
   }
 
+  const { data: tasks, error: tErr } = await supabaseClient
+    .from('tasks').select('*').order('due_date', { ascending: true });
+  if (tErr) { alert('마감일 목록을 불러오지 못했어요: ' + tErr.message); }
+  state.tasks = tasks || [];
+
   state.loaded = true;
   render();
+}
+
+async function addTaskRemote(courseId, title, dueDate) {
+  const userId = state.session.user.id;
+  const { data, error } = await supabaseClient
+    .from('tasks').insert([{ user_id: userId, course_id: courseId, title, due_date: dueDate }]).select();
+  if (error) throw new Error('마감일 추가 실패: ' + error.message);
+  if (!data || !data[0]) throw new Error('마감일 추가 실패: 서버 응답이 비어있어요');
+  state.tasks.push(data[0]);
+  state.tasks.sort((a,b) => a.due_date.localeCompare(b.due_date));
+}
+
+async function toggleTaskDone(id, done) {
+  const { error } = await supabaseClient.from('tasks').update({ done }).eq('id', id);
+  if (error) throw new Error('업데이트 실패: ' + error.message);
+  const task = state.tasks.find(t => t.id === id);
+  if (task) task.done = done;
+}
+
+async function deleteTaskRemote(id) {
+  const { error } = await supabaseClient.from('tasks').delete().eq('id', id);
+  if (error) throw new Error('삭제 실패: ' + error.message);
+  state.tasks = state.tasks.filter(t => t.id !== id);
 }
 
 async function addCourseRemote(name, color) {
@@ -739,15 +852,15 @@ function renderNotes() {
         const c = courseById(n.course_id);
         const color = c ? c.color : '#7A3B33';
         return `<div class="note-card" style="--swatch:${color}">
-          <div class="card-actions">
-            <button data-edit="${n.id}">수정</button>
-            <button data-del="${n.id}">삭제</button>
-          </div>
           <div class="top">
             <h3>${escapeHtml(n.title)}</h3>
             <span class="tag">${c ? escapeHtml(c.name) : '삭제된 과목'}</span>
           </div>
           <div class="content">${escapeHtml(n.content || '')}</div>
+          <div class="card-actions">
+            <button data-edit="${n.id}">수정</button>
+            <button data-del="${n.id}">삭제</button>
+          </div>
         </div>`;
       }).join('')}
     </div>
@@ -782,10 +895,62 @@ function renderForm() {
   `;
 }
 
+function fmtDday(dueDate) {
+  const today = new Date(); today.setHours(0,0,0,0);
+  const due = new Date(dueDate + 'T00:00:00');
+  const diff = Math.round((due - today) / 86400000);
+  if (diff === 0) return { label: 'D-DAY', overdue: false };
+  if (diff > 0) return { label: 'D-' + diff, overdue: false };
+  return { label: 'D+' + Math.abs(diff), overdue: true };
+}
+
+function renderDeadlines() {
+  const slot = document.getElementById('deadlineSlot');
+  const upcoming = state.tasks.filter(t => !t.done);
+  if (upcoming.length === 0) { slot.innerHTML = ''; return; }
+  slot.innerHTML = `<div class="deadline-strip">
+    ${upcoming.map(t => {
+      const c = courseById(t.course_id);
+      const dday = fmtDday(t.due_date);
+      return `<div class="deadline-card ${dday.overdue ? 'overdue' : ''}">
+        <span class="dday">${dday.label}</span>
+        <div class="info">
+          <div class="title-line">${escapeHtml(t.title)}</div>
+          <div class="course-line">${c ? escapeHtml(c.name) : ''}</div>
+        </div>
+        <button data-donetask="${t.id}" title="완료 처리">✓</button>
+        <button data-deltask="${t.id}" title="삭제">✕</button>
+      </div>`;
+    }).join('')}
+  </div>`;
+}
+
+function renderTaskForm() {
+  const slot = document.getElementById('taskFormSlot');
+  if (!state.taskFormOpen) { slot.innerHTML = ''; return; }
+  slot.innerHTML = `
+    <div class="task-form">
+      <div class="row">
+        <select id="taskCourse">
+          ${state.courses.map(c => `<option value="${c.id}">${escapeHtml(c.name)}</option>`).join('')}
+        </select>
+        <input type="text" id="taskTitle" placeholder="과제/시험 이름">
+        <input type="date" id="taskDue" value="${new Date().toISOString().slice(0,10)}">
+      </div>
+      <div class="actions">
+        <button class="cancel" id="taskCancel">취소</button>
+        <button class="save" id="taskSave">추가</button>
+      </div>
+    </div>
+  `;
+}
+
 function render() {
   if (!state.loaded) return;
   renderSidebar();
   renderHeader();
+  renderDeadlines();
+  renderTaskForm();
   renderForm();
   renderNotes();
 }
@@ -874,6 +1039,48 @@ document.addEventListener('click', async (e) => {
     state.formOpen = false;
     state.editingId = null;
     render();
+    return;
+  }
+
+  if (e.target.id === 'newTaskBtn') {
+    if (state.courses.length === 0) { alert('먼저 과목을 추가해주세요.'); return; }
+    state.taskFormOpen = true;
+    render();
+    document.getElementById('taskTitle')?.focus();
+    return;
+  }
+
+  if (e.target.id === 'taskCancel') {
+    state.taskFormOpen = false;
+    render();
+    return;
+  }
+
+  if (e.target.id === 'taskSave') {
+    const courseId = document.getElementById('taskCourse').value;
+    const title = document.getElementById('taskTitle').value.trim();
+    const dueDate = document.getElementById('taskDue').value;
+    if (!title) { alert('과제/시험 이름을 입력해주세요.'); return; }
+    if (!dueDate) { alert('날짜를 선택해주세요.'); return; }
+    await addTaskRemote(courseId, title, dueDate);
+    state.taskFormOpen = false;
+    render();
+    return;
+  }
+
+  if (e.target.closest('[data-donetask]')) {
+    const id = e.target.closest('[data-donetask]').dataset.donetask;
+    await toggleTaskDone(id, true);
+    render();
+    return;
+  }
+
+  if (e.target.closest('[data-deltask]')) {
+    const id = e.target.closest('[data-deltask]').dataset.deltask;
+    if (confirm('이 마감일을 삭제할까요?')) {
+      await deleteTaskRemote(id);
+      render();
+    }
     return;
   }
  } catch (err) {
